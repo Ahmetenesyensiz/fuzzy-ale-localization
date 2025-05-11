@@ -1,168 +1,127 @@
-import os
-import pandas as pd
+# main.py (GÜNCELLENMİŞ)
+
 import numpy as np
-import matplotlib.pyplot as plt
-from utils.data_preprocessing import load_data, explore_data, split_data, normalize_data
-from utils.membership_functions import generate_triangular_mfs, generate_gaussian_mfs, plot_membership_functions
+import pandas as pd
+import os
+from utils.data_preprocessing import load_data, split_data, normalize_data
 from utils.rule_generator import generate_rule_base
+from fuzzy_models.membership.triangular import triangular_membership
+from fuzzy_models.membership.gaussian import gaussian_membership
 from fuzzy_models.inference.mamdani_engine import MamdaniEngine
-from evaluation.error_metrics import evaluate_model, compare_models
-from evaluation.visualization import plot_predictions_vs_actual, plot_error_distribution, plot_fuzzy_inference_example
+from fuzzy_models.defuzzification.center_of_sums import center_of_sums
+from fuzzy_models.defuzzification.weighted_average import weighted_average
+from evaluation.error_metrics import mean_absolute_error, root_mean_squared_error
+from evaluation.visualization import plot_predictions_vs_actual, plot_comparison_metrics
 
-def create_directories():
-    """Gerekli dizinleri oluşturur"""
-    dirs = ['data', 'results', 'fuzzy_models', 'evaluation', 'utils', 'report', 'presentation']
-    for d in dirs:
-        os.makedirs(d, exist_ok=True)
-
-def run_experiment(mf_type, defuzz_method, X_train, X_test, y_train, y_test, data_ranges, output_range):
-    """
-    Belirli bir kombinasyon için bulanık çıkarım deneyini çalıştırır
-    
-    Args:
-        mf_type: 'triangular' veya 'gaussian'
-        defuzz_method: 'center_of_sums' veya 'weighted_average'
-        X_train, X_test, y_train, y_test: Eğitim ve test verileri
-        data_ranges: Her değişken için (min, max) değerlerini içeren sözlük
-        output_range: Çıkış değişkeni aralığı (min, max)
-        
-    Returns:
-        dict: Model sonuçları
-    """
-    model_name = f"{mf_type.capitalize()}_{defuzz_method.replace('_', '_')}"
-    print(f"\nÇalıştırılıyor: {model_name}")
-    
-    # Bulanık çıkarım sistemi oluştur
-    fis = MamdaniEngine(mf_type=mf_type)
-    
-    # Değişken isimlerini al
-    variable_names = X_train.columns
-    
-    # Giriş değişkenleri için bulanık kümeleri tanımla
-    num_sets = 5  # Her değişken için bulanık küme sayısı
-    labels = ['Very_Low', 'Low', 'Medium', 'High', 'Very_High']
-    
-    for var_name in variable_names:
+def create_input_mfs(mf_type, feature_ranges):
+    input_mfs = {}
+    for feature, (min_val, max_val) in feature_ranges.items():
         if mf_type == 'triangular':
-            mfs = generate_triangular_mfs(data_ranges[var_name], num_sets)
-        else:  # gaussian
-            mfs = generate_gaussian_mfs(data_ranges[var_name], num_sets)
-        
-        fis.add_input_variable(var_name, mfs, labels)
-        
-        # Üyelik fonksiyonlarını görselleştir
-        plot_membership_functions(
-            mf_type, mfs, data_ranges[var_name], labels,
-            f"{var_name} {mf_type.capitalize()} Üyelik Fonksiyonları",
-            f"{var_name}_{mf_type}_mfs"
-        )
-    
-    # Çıkış değişkeni için bulanık kümeleri tanımla
+            input_mfs[feature] = {
+                'low': lambda x, a=min_val, b=(min_val+max_val)/2, c=max_val: triangular_membership(x, a, a, b),
+                'medium': lambda x, a=min_val, b=(min_val+max_val)/2, c=max_val: triangular_membership(x, a, b, c),
+                'high': lambda x, a=min_val, b=(min_val+max_val)/2, c=max_val: triangular_membership(x, b, c, c)
+            }
+        elif mf_type == 'gaussian':
+            center = (min_val + max_val) / 2
+            spread = (max_val - min_val) / 4
+            input_mfs[feature] = {
+                'low': lambda x, m=min_val, s=spread: gaussian_membership(x, m, s),
+                'medium': lambda x, m=center, s=spread: gaussian_membership(x, m, s),
+                'high': lambda x, m=max_val, s=spread: gaussian_membership(x, m, s)
+            }
+    return input_mfs
+
+def create_output_mfs(mf_type, output_range):
+    min_val, max_val = np.min(output_range), np.max(output_range)
     if mf_type == 'triangular':
-        output_mfs = generate_triangular_mfs(output_range, num_sets)
-    else:  # gaussian
-        output_mfs = generate_gaussian_mfs(output_range, num_sets)
-    
-    fis.add_output_variable('ale', output_mfs, labels)
-    
-    # Üyelik fonksiyonlarını görselleştir
-    plot_membership_functions(
-        mf_type, output_mfs, output_range, labels,
-        f"ALE {mf_type.capitalize()} Üyelik Fonksiyonları",
-        f"ale_{mf_type}_mfs"
-    )
-    
-    # Kural tabanını oluştur
-    rules = generate_rule_base(num_sets, num_sets, num_sets, num_sets, num_sets)
-    fis.add_rules(rules)
-    
-    # Eğitim verisinde tahminler yap
-    y_train_pred = []
-    for _, row in X_train.iterrows():
-        input_values = {col: row[col] for col in X_train.columns}
-        pred = fis.predict(input_values, defuzzification=defuzz_method, output_range=output_range)
-        y_train_pred.append(pred)
-    
-    # Test verisinde tahminler yap
-    y_test_pred = []
-    for _, row in X_test.iterrows():
-        input_values = {col: row[col] for col in X_test.columns}
-        pred = fis.predict(input_values, defuzzification=defuzz_method, output_range=output_range)
-        y_test_pred.append(pred)
-    
-    # Değerlendirme
-    train_metrics = evaluate_model(f"{model_name}_Train", y_train, y_train_pred)
-    test_metrics = evaluate_model(f"{model_name}_Test", y_test, y_test_pred)
-    
-    print(f"Eğitim MAE: {train_metrics['mae']:.4f}, RMSE: {train_metrics['rmse']:.4f}")
-    print(f"Test MAE: {test_metrics['mae']:.4f}, RMSE: {test_metrics['rmse']:.4f}")
-    
-    # Tahminleri görselleştir
-    plot_predictions_vs_actual(f"{model_name}_Train", y_train, y_train_pred)
-    plot_predictions_vs_actual(f"{model_name}_Test", y_test, y_test_pred)
-    
-    # Hata dağılımını görselleştir
-    plot_error_distribution(f"{model_name}_Train", y_train, y_train_pred)
-    plot_error_distribution(f"{model_name}_Test", y_test, y_test_pred)
-    
-    # Örnek çıkarım sürecini görselleştir (test veri setinin ilk örneği)
-    if len(X_test) > 0:
-        sample_input = {col: X_test.iloc[0][col] for col in X_test.columns}
-        plot_fuzzy_inference_example(fis, sample_input, output_range)
-    
-    # Sonuçları kaydet
-    predictions_df = pd.DataFrame({
-        'actual': y_test,
-        'predicted': y_test_pred,
-        'error': np.array(y_test) - np.array(y_test_pred)
-    })
-    predictions_df.to_csv(f'results/{model_name}_predictions.csv', index=False)
-    
-    return test_metrics
+        return {
+            'low_ALE': lambda x: triangular_membership(x, min_val, min_val, (min_val+max_val)/2),
+            'medium_ALE': lambda x: triangular_membership(x, min_val, (min_val+max_val)/2, max_val),
+            'high_ALE': lambda x: triangular_membership(x, (min_val+max_val)/2, max_val, max_val)
+        }
+    elif mf_type == 'gaussian':
+        center = (min_val + max_val) / 2
+        spread = (max_val - min_val) / 4
+        return {
+            'low_ALE': lambda x: gaussian_membership(x, min_val, spread),
+            'medium_ALE': lambda x: gaussian_membership(x, center, spread),
+            'high_ALE': lambda x: gaussian_membership(x, max_val, spread)
+        }
 
 def main():
-    """Ana uygulama fonksiyonu"""
-    print("Kablosuz Sensör Ağlarında Bulanık Mantık ile Düğüm Lokalizasyonu")
-    print("=" * 70)
-    
-    # Dizinleri oluştur
-    create_directories()
-    
-    # Veriyi yükle ve analiz et
-    data_path = 'data/sensor_localization_data.csv'
-    data = load_data(data_path)
-    data = explore_data(data)
-    
-    # Veriyi böl
-    X_train, X_test, y_train, y_test = split_data(data)
-    
-    # Veri aralıklarını belirle
-    data_ranges = {}
-    for col in X_train.columns:
-        min_val = min(X_train[col].min(), X_test[col].min())
-        max_val = max(X_train[col].max(), X_test[col].max())
-        data_ranges[col] = (min_val, max_val)
-    
-    output_range = (min(y_train.min(), y_test.min()), max(y_train.max(), y_test.max()))
-    
-    # Tüm kombinasyonları dene
+    os.makedirs('results/plots', exist_ok=True)
+
+    df = load_data('data/sensor_localization_data.csv')
+    X, y = split_data(df)
+    X, _ = normalize_data(X)
+
+    feature_ranges = {
+        'anchor_ratio': (np.min(X[:,0]), np.max(X[:,0])),
+        'trans_range': (np.min(X[:,1]), np.max(X[:,1])),
+        'node_density': (np.min(X[:,2]), np.max(X[:,2])),
+        'iterations': (np.min(X[:,3]), np.max(X[:,3]))
+    }
+
+    output_range = np.linspace(min(y), max(y), 100)
+
+    mf_types = ['triangular', 'gaussian']
+    defuzz_methods = ['COS', 'WA']
     results = []
-    
-    for mf_type in ['triangular', 'gaussian']:
-        for defuzz_method in ['center_of_sums', 'weighted_average']:
-            test_metrics = run_experiment(
-                mf_type, defuzz_method,
-                X_train, X_test, y_train, y_test,
-                data_ranges, output_range
-            )
-            results.append(test_metrics)
-    
-    # Sonuçları karşılaştır
+    mae_dict = {}
+    rmse_dict = {}   # ✅ YENİ EKLENDİ
+
+    for mf_type in mf_types:
+        for defuzz_method in defuzz_methods:
+            model_name = f"{mf_type} + {defuzz_method}"
+            print(f"\nModel: {model_name}")
+
+            input_mfs = create_input_mfs(mf_type, feature_ranges)
+            output_mfs = create_output_mfs(mf_type, output_range)
+            rules = generate_rule_base()
+            engine = MamdaniEngine(input_mfs, output_mfs, rules)
+
+            y_pred = []
+            for sample in X:
+                inputs = {
+                    'anchor_ratio': sample[0],
+                    'trans_range': sample[1],
+                    'node_density': sample[2],
+                    'iterations': sample[3]
+                }
+
+                if defuzz_method == 'COS':
+                    aggregated = engine.infer(inputs, output_range)
+                    prediction = center_of_sums(output_range, aggregated)
+                elif defuzz_method == 'WA':
+                    fuzzified = engine.fuzzify(inputs)
+                    activations = engine.apply_rules(fuzzified)
+                    output_centers = {
+                        'low_ALE': np.min(y),
+                        'medium_ALE': (np.min(y) + np.max(y)) / 2,
+                        'high_ALE': np.max(y)
+                    }
+                    prediction = weighted_average(activations, output_centers)
+
+                y_pred.append(prediction)
+
+            mae = mean_absolute_error(y, y_pred)
+            rmse = root_mean_squared_error(y, y_pred)
+            print(f"{model_name} → MAE: {mae:.4f}, RMSE: {rmse:.4f}")
+
+            results.append({'Model': model_name, 'MAE': mae, 'RMSE': rmse})
+            mae_dict[model_name] = mae
+            rmse_dict[model_name] = rmse    # ✅ YENİ EKLENDİ
+
+            plot_path = f"results/plots/{mf_type}_{defuzz_method}.png"
+            plot_predictions_vs_actual(y, y_pred, title=f"{model_name} - Gerçek vs Tahmin", save_path=plot_path)
+
     results_df = pd.DataFrame(results)
-    compare_models(results_df)
-    results_df.to_csv('results/model_comparison.csv', index=False)
-    
-    print("\nUygulama tamamlandı! Sonuçlar 'results/' klasöründe.")
+    results_df.to_csv('results/comparison_metrics.csv', index=False)
+    print("\nTüm metrikler 'results/comparison_metrics.csv' dosyasına kaydedildi.")
+
+    plot_comparison_metrics(mae_dict, metric_name='MAE', save_path="results/overall_comparison_mae.png")
+    plot_comparison_metrics(rmse_dict, metric_name='RMSE', save_path="results/overall_comparison_rmse.png")   # ✅ YENİ EKLENDİ
 
 if __name__ == "__main__":
     main()

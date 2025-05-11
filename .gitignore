@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.egg
+.Python
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
+
+# VS Code
+.vscode/
+
+# macOS / Linux / Windows
+.DS_Store
+.idea/
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Data files (dataset gitmesin)
+data/
+
+# Temporary files
+*.log
+*.tmp
+*.bak
